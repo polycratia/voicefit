@@ -11,7 +11,8 @@ It is a tool for a team's own voice. It is not a tool for evading detectors.
 
 ## Status
 
-Pre-alpha: this commit is the package skeleton only, no logic yet.
+Pre-alpha: profiling works, the rewrite and verification stages are not
+implemented yet. The public API is not stable.
 
 ## Requirements
 
@@ -27,10 +28,22 @@ pip install -e .
 ## Usage
 
 ```python
-import voicefit
+from voicefit import build_profile
 
-print(voicefit.__version__)
+profile = build_profile([
+    "The migration ran clean. No rollback was needed.",
+    "Numbers first, then the story.\n\nIt might be that simple.",
+])
+
+print(profile.sentence_length_mean, profile.sentence_length_variance)
+print(profile.hedge_rate, profile.question_share)
+print(profile.to_json())
 ```
+
+The profile measures sentence length (mean and variance), hedging, the share
+of questions and exclamations, punctuation habits per 1000 words, and
+paragraph shape. `StyleProfile.to_json()` and `StyleProfile.from_json()` round
+trip it, so a profile can be stored next to the corpus it came from.
 
 ## Tests
 
