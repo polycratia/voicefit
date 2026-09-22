@@ -11,8 +11,8 @@ It is a tool for a team's own voice. It is not a tool for evading detectors.
 
 ## Status
 
-Pre-alpha: profiling and distance reporting work, the rewrite and verification
-stages are not implemented yet. The public API is not stable.
+Pre-alpha: profiling, distance reporting and protected spans work, the rewrite
+stage itself is not implemented yet. The public API is not stable.
 
 ## Requirements
 
@@ -72,6 +72,38 @@ from exaggerating a small difference. Pass `scales={"hedge_rate": 0.01}` to
 set your own. Use `compare_texts` for a corpus, or `compare_profiles` when the
 measurement already exists. When the profile was built with a custom hedge
 list, pass the same list to the comparison.
+
+## Protected spans
+
+```python
+from voicefit import extract_spans, verify_spans
+
+for span in extract_spans("Deploy 3 replicas behind https://api.example.com/v2."):
+    print(span.kind, span.text, span.start, span.end)
+
+result = verify_spans(
+    "Deploy 3 replicas behind https://api.example.com/v2.",
+    "Deploy several replicas behind the gateway.",
+)
+
+print(result.intact)
+print(result.report())
+for check in result.lost:
+    print(check.kind, check.text, check.expected, check.found)
+```
+
+`extract_spans` pulls URLs, code spans (inline and fenced), numbers and
+identifiers out of a text, in order and without overlap: a URL inside a code
+span belongs to that code span. `verify_spans` takes those spans from the
+source and looks for each one in the rewrite byte for byte. A span counts as
+surviving only when the exact characters are there and are not glued into a
+longer word, number or URL, so a `42` in the rewrite never passes for a `4` in
+the source. Repeated spans are counted: two mentions of `3` must still be two.
+
+Identifiers are read widely, so file names, dotted paths, versions such as
+`v1.2.3`, ticket keys such as `ENG-421`, hashes and digit-letter mixes such as
+`200ms` stay whole. Pass `kinds=["url", "number"]` to protect less, and use
+`SpanReport.to_json()` to store the result next to the rewrite it judged.
 
 ## Tests
 
