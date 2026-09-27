@@ -11,8 +11,8 @@ It is a tool for a team's own voice. It is not a tool for evading detectors.
 
 ## Status
 
-Pre-alpha: profiling, distance reporting and protected spans work, the rewrite
-stage itself is not implemented yet. The public API is not stable.
+Pre-alpha: profiling, distance reporting, protected spans and the rewrite loop
+work. The public API is not stable.
 
 ## Requirements
 
@@ -104,6 +104,40 @@ Identifiers are read widely, so file names, dotted paths, versions such as
 `v1.2.3`, ticket keys such as `ENG-421`, hashes and digit-letter mixes such as
 `200ms` stay whole. Pass `kinds=["url", "number"]` to protect less, and use
 `SpanReport.to_json()` to store the result next to the rewrite it judged.
+
+## The rewrite loop
+
+```python
+from voicefit import RewriteConstraints, rewrite
+
+def model(instruction: str) -> str:
+    return my_llm(instruction)  # any callable, any provider
+
+result = rewrite(
+    "The migration ran clean and needed no rollback.",
+    profile,
+    model,
+    constraints=RewriteConstraints(tolerance=1.5, notes=["Keep the headings."]),
+)
+
+print(result.accepted)
+print(result.text)
+print(result.report())
+```
+
+`rewrite` builds the instruction from the profile and the constraints, calls
+the model, then checks what came back: every protected span of the source has
+to survive, and every axis has to sit within `tolerance`. A failing attempt is
+retried once, with the measured failures quoted in the new instruction and the
+previous answer attached. If the retry fails too, `result.text` is the original
+text and `result.accepted` is `False`: the loop never hands back a rewrite that
+did not pass. Each attempt keeps its instruction, its output, its `SpanReport`
+and its `ProfileDistance`, and `RewriteResult.to_json()` stores the lot.
+
+`RewriteConstraints` carries the tolerance, the span `kinds` to protect, the
+`hedges` list the profile was built with, per-axis `scales`, and free-form
+`notes` appended to the rules. Call `build_instruction` on its own to read the
+prompt before wiring a model in.
 
 ## Tests
 
