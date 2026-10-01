@@ -7,6 +7,11 @@ ask once more with the failures spelled out. When the retry fails as well, the
 original text is returned, so a caller never silently ships a rewrite that lost
 a number or drifted off the profile.
 
+An :class:`~voicefit.memory.OutputMemory` can be handed in too. The shapes it
+already holds are named in the instruction, a rewrite that repeats one of them
+beyond the configured share fails like any other check, and only an accepted
+output is added to the window.
+
 The model is any callable that takes the instruction and returns the rewritten
 text. voicefit does not talk to a provider itself.
 """
@@ -19,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from voicefit.distance import DEFAULT_TOLERANCE, ProfileDistance, compare_text
+from voicefit.memory import OutputMemory, PatternUse, RepetitionReport
 from voicefit.profile import SCHEMA_VERSION, StyleProfile
 from voicefit.spans import ProtectedSpan, SpanReport, extract_spans, verify_spans
 
@@ -87,8 +93,23 @@ def _protected_texts(spans: Sequence[ProtectedSpan]) -> list[str]:
     return texts
 
 
+def _avoid_lines(avoid: Sequence[PatternUse]) -> list[str]:
+    lines: list[str] = []
+    for kind, lead in (("opening", "Do not open with"), ("ending", "Do not end with")):
+        patterns = [use.pattern for use in avoid if use.kind == kind]
+        if patterns:
+            listed = ", ".join(f'"{pattern}"' for pattern in patterns)
+            lines.append(
+                f"- {lead}: {listed}. The recent outputs of this voice already"
+                f" lean on that shape."
+            )
+    return lines
+
+
 def _rule_lines(
-    spans: Sequence[ProtectedSpan], constraints: RewriteConstraints
+    spans: Sequence[ProtectedSpan],
+    constraints: RewriteConstraints,
+    avoid: Sequence[PatternUse],
 ) -> list[str]:
     lines = [
         "- Keep every fact, number, link and identifier the text states.",
@@ -103,6 +124,7 @@ def _rule_lines(
         )
     lines.append("- Keep the paragraph breaks of the original.")
     lines.append("- Vary sentence openings and do not reuse a phrasing twice.")
+    lines.extend(_avoid_lines(avoid))
     lines.append("- Return the rewritten text only, with no commentary.")
     lines.extend(f"- {note}" for note in constraints.notes)
     return lines
@@ -115,12 +137,15 @@ def build_instruction(
     constraints: RewriteConstraints | None = None,
     failures: Sequence[str] = (),
     previous: str = "",
+    avoid: Sequence[PatternUse] = (),
 ) -> str:
     """Render the instruction for one attempt.
 
     The profile is spelled out axis by axis, the protected spans are listed
-    verbatim, and on a retry the ``failures`` of the previous attempt are quoted
-    as they were measured, with ``previous`` attached for reference.
+    verbatim, the shapes in ``avoid`` are named as openings and endings the
+    rewrite may not reuse, and on a retry the ``failures`` of the previous
+    attempt are quoted as they were measured, with ``previous`` attached for
+    reference.
     """
     if not isinstance(text, str):
         raise TypeError("build_instruction expects one source string")
@@ -132,7 +157,7 @@ def build_instruction(
         "and the order of the argument.",
         "Target style, measured from the author's own corpus:\n"
         + "\n".join(_profile_lines(profile)),
-        "Rules:\n" + "\n".join(_rule_lines(spans, limits)),
+        "Rules:\n" + "\n".join(_rule_lines(spans, limits, avoid)),
     ]
     if failures:
         blocks.append(
@@ -173,6 +198,7 @@ class RewriteAttempt:
     spans: SpanReport
     distance: ProfileDistance | None
     failures: tuple[str, ...]
+    repetition: RepetitionReport | None = None
 
     @property
     def passed(self) -> bool:
@@ -187,6 +213,9 @@ class RewriteAttempt:
             "output": self.output,
             "spans": self.spans.to_dict(),
             "distance": None if self.distance is None else self.distance.to_dict(),
+            "repetition": (
+                None if self.repetition is None else self.repetition.to_dict()
+            ),
         }
 
 
@@ -241,9 +270,12 @@ def _measure(
     source: str,
     profile: StyleProfile,
     constraints: RewriteConstraints,
+    memory: OutputMemory | None,
+    key: str | StyleProfile,
 ) -> RewriteAttempt:
     spans = verify_spans(source, output, kinds=constraints.kinds)
     distance: ProfileDistance | None = None
+    repetition: RepetitionReport | None = None
     failures: list[str] = []
     if not output.strip():
         failures.append("the model returned an empty rewrite")
@@ -258,7 +290,11 @@ def _measure(
             )
         except ValueError:
             failures.append("the rewrite has no measurable sentence")
+        if memory is not None:
+            repetition = memory.check(output, key)
     failures.extend(_failures(spans, distance))
+    if repetition is not None:
+        failures.extend(repetition.failures)
     return RewriteAttempt(
         number=number,
         instruction=instruction,
@@ -266,6 +302,7 @@ def _measure(
         spans=spans,
         distance=distance,
         failures=tuple(failures),
+        repetition=repetition,
     )
 
 
@@ -275,6 +312,8 @@ def rewrite(
     model: Model,
     *,
     constraints: RewriteConstraints | None = None,
+    memory: OutputMemory | None = None,
+    key: str | StyleProfile | None = None,
 ) -> RewriteResult:
     """Rewrite ``text`` towards ``profile`` through ``model``, then check it.
 
@@ -282,17 +321,29 @@ def rewrite(
     instruction. When the retry fails too, ``RewriteResult.text`` is the
     original ``text`` and ``RewriteResult.accepted`` is ``False``: the loop
     never hands back a rewrite that did not pass the checks.
+
+    With a ``memory``, the openings and endings that already carry more than
+    its share of the window are named in the instruction and a rewrite that
+    reuses one of them fails. Only an accepted output is remembered, under
+    ``key`` or, when none is given, under the profile itself.
     """
     if not isinstance(text, str):
         raise TypeError("rewrite expects one source string")
 
     limits = constraints if constraints is not None else RewriteConstraints()
+    target: str | StyleProfile = profile if key is None else key
+    avoid = memory.overused(target) if memory is not None else ()
     attempts: list[RewriteAttempt] = []
     failures: tuple[str, ...] = ()
     previous = ""
     for number in range(1, _MAX_ATTEMPTS + 1):
         instruction = build_instruction(
-            text, profile, constraints=limits, failures=failures, previous=previous
+            text,
+            profile,
+            constraints=limits,
+            failures=failures,
+            previous=previous,
+            avoid=avoid,
         )
         output = model(instruction)
         if not isinstance(output, str):
@@ -304,6 +355,8 @@ def rewrite(
             source=text,
             profile=profile,
             constraints=limits,
+            memory=memory,
+            key=target,
         )
         attempts.append(attempt)
         if attempt.passed:
@@ -312,6 +365,8 @@ def rewrite(
         previous = output
 
     last = attempts[-1]
+    if last.passed and memory is not None:
+        memory.remember(last.output, target)
     return RewriteResult(
         text=last.output if last.passed else text,
         source=text,

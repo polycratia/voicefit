@@ -11,8 +11,8 @@ It is a tool for a team's own voice. It is not a tool for evading detectors.
 
 ## Status
 
-Pre-alpha: profiling, distance reporting, protected spans and the rewrite loop
-work. The public API is not stable.
+Pre-alpha: profiling, distance reporting, protected spans, the rewrite loop and
+output memory work. The public API is not stable.
 
 ## Requirements
 
@@ -138,6 +138,41 @@ and its `ProfileDistance`, and `RewriteResult.to_json()` stores the lot.
 `hedges` list the profile was built with, per-axis `scales`, and free-form
 `notes` appended to the rules. Call `build_instruction` on its own to read the
 prompt before wiring a model in.
+
+## Memory against self-repetition
+
+```python
+from voicefit import OutputMemory
+
+memory = OutputMemory(capacity=20, max_share=0.34)
+
+result = rewrite(source, profile, model, memory=memory, key="handbook")
+
+print(memory.recent("handbook"))
+print(memory.check(result.text, "handbook").report())
+for use in memory.overused("handbook"):
+    print(use.kind, use.pattern, use.count, use.share)
+```
+
+A run of texts can be on target on every axis and still read as a template
+because each one opens the same way and lands on the same closing phrase.
+`OutputMemory` keeps the recent outputs of a profile and measures two shapes of
+a candidate against them: the opening words of its first sentence and the
+closing words of its last. A shape is refused once it already carries more than
+`max_share` of the window. `capacity` is how many outputs are kept, and
+`opening_words` and `ending_words` how many words each shape is read from.
+
+Windows are kept per key, so two voices never share a history. Pass `key` to
+name one yourself, or leave it out and the profile stands in for it, keyed by
+its own numbers through `profile_key`.
+
+Inside the loop the overused shapes are named in the instruction as openings
+and endings to avoid, a repeated shape fails an attempt the way a lost number
+does, and only an accepted output is remembered. Drive the model yourself and
+`OutputMemory.check`, `OutputMemory.remember` and
+`build_instruction(..., avoid=memory.overused(key))` do the same work in the
+open. `OutputMemory.to_json()` and `OutputMemory.from_json()` round trip the
+whole window, so a voice keeps its history between runs.
 
 ## Tests
 

@@ -5,6 +5,7 @@ import json
 import pytest
 
 from voicefit import (
+    OutputMemory,
     RewriteConstraints,
     SCHEMA_VERSION,
     build_instruction,
@@ -58,6 +59,7 @@ def test_a_passing_rewrite_is_returned_after_one_call():
     assert result.attempts[0].spans.intact
     assert result.attempts[0].distance is not None
     assert result.attempts[0].distance.matches
+    assert result.attempts[0].repetition is None
 
 
 def test_a_failed_attempt_is_retried_once_with_the_failures_listed():
@@ -150,6 +152,60 @@ def test_a_custom_hedge_list_is_used_for_the_checks():
     assert distance.axis("hedge_rate").deviation == pytest.approx(0.0)
 
 
+def test_an_accepted_rewrite_is_remembered_and_then_refused_twice_over():
+    profile = build_profile([SOURCE])
+    memory = OutputMemory()
+
+    first = rewrite(SOURCE, profile, lambda instruction: SOURCE, memory=memory)
+    assert first.accepted
+    assert memory.recent(profile) == (SOURCE,)
+
+    second = rewrite(SOURCE, profile, lambda instruction: SOURCE, memory=memory)
+    assert not second.accepted
+    assert second.text == SOURCE
+    assert any("opening" in failure for failure in second.failures)
+    repetition = second.attempts[0].repetition
+    assert repetition is not None
+    assert not repetition.fresh
+    assert memory.recent(profile) == (SOURCE,)
+
+
+def test_the_instruction_names_the_shapes_to_avoid():
+    profile = build_profile([SOURCE])
+    memory = OutputMemory()
+    memory.remember(SOURCE, profile)
+    seen: list[str] = []
+
+    def model(instruction: str) -> str:
+        seen.append(instruction)
+        return SOURCE
+
+    rewrite(SOURCE, profile, model, memory=memory)
+    assert "Do not open with" in seen[0]
+    assert "the migration ran clean" in seen[0]
+    assert "Do not end with" in seen[0]
+
+
+def test_a_memory_key_can_be_given_explicitly():
+    profile = build_profile([SOURCE])
+    memory = OutputMemory()
+    result = rewrite(
+        SOURCE, profile, lambda instruction: SOURCE, memory=memory, key="handbook"
+    )
+    assert result.accepted
+    assert memory.keys() == ("handbook",)
+    assert memory.recent("handbook") == (SOURCE,)
+
+
+def test_a_failing_rewrite_is_not_remembered():
+    profile = build_profile([SOURCE])
+    memory = OutputMemory()
+    result = rewrite(SOURCE, profile, lambda instruction: NOTHING_KEPT, memory=memory)
+    assert not result.accepted
+    assert memory.recent(profile) == ()
+    assert len(memory) == 0
+
+
 def test_report_lists_each_attempt_and_the_outcome():
     profile = build_profile([SOURCE])
     report = rewrite(SOURCE, profile, lambda instruction: NOTHING_KEPT).report()
@@ -169,6 +225,21 @@ def test_the_result_serialises_to_json():
     assert payload["failures"] == list(result.failures)
     assert [attempt["number"] for attempt in payload["attempts"]] == [1, 2]
     assert payload["attempts"][0]["spans"]["intact"] is False
+    assert payload["attempts"][0]["repetition"] is None
+
+
+def test_the_repetition_report_is_carried_into_the_json():
+    profile = build_profile([SOURCE])
+    memory = OutputMemory()
+    memory.remember(SOURCE, "handbook")
+    result = rewrite(
+        SOURCE, profile, lambda instruction: SOURCE, memory=memory, key="handbook"
+    )
+    payload = json.loads(result.to_json())
+    repetition = payload["attempts"][0]["repetition"]
+    assert repetition["key"] == "handbook"
+    assert repetition["fresh"] is False
+    assert "opening" in repetition["repeats"]
 
 
 def test_wrong_types_are_rejected():
