@@ -11,8 +11,8 @@ It is a tool for a team's own voice. It is not a tool for evading detectors.
 
 ## Status
 
-Pre-alpha: profiling, distance reporting, protected spans, the rewrite loop and
-output memory work. The public API is not stable.
+Pre-alpha: profiling, distance reporting, protected spans, the rewrite loop,
+output memory and the command line work. The public API is not stable.
 
 ## Requirements
 
@@ -173,6 +173,39 @@ does, and only an accepted output is remembered. Drive the model yourself and
 `build_instruction(..., avoid=memory.overused(key))` do the same work in the
 open. `OutputMemory.to_json()` and `OutputMemory.from_json()` round trip the
 whole window, so a voice keeps its history between runs.
+
+## Command line
+
+```bash
+voicefit measure corpus/*.md > profile.json
+voicefit diff --profile profile.json draft.md
+voicefit fit --profile profile.json --model "my-llm --quiet" draft.md
+```
+
+Every command prints one JSON report, and the report is the same dictionary the
+library returns, so a shell pipeline sees what a Python caller sees. `measure`
+builds a profile from a corpus. `diff` reports the per-axis distance of a text
+from a stored profile. `fit` runs the rewrite loop against a model command,
+handing the instruction to its standard input and reading the rewrite from its
+standard output, so any program that answers a prompt can be the model.
+
+`-` stands for standard input and is what a command reads when no path is
+given, so `cat draft.md | voicefit diff --profile profile.json` works as well.
+It can be read only once per run: pass the other input as a file. `-o PATH`
+writes the report to a file instead of stdout, `--compact` puts it on a single
+line, and `--hedges PATH` replaces the default hedge list with one phrase per
+line.
+
+`diff` and `fit` share `--tolerance N` and `--scale AXIS=N`. `fit` adds `--kind`
+to protect fewer span kinds, `--note` to append a rule to the instruction,
+`--memory PATH` for a window that is read before the run and written back after
+it, `--key NAME` to name that window, and `--dry-run` to print the instruction
+and the shapes to avoid instead of calling a model.
+
+The exit code keeps a judgement apart from a failure: 0 when the text is on
+profile or the rewrite was accepted, 1 when it is not, and 2 when the command
+could not run at all. Without installing the script, `python -m voicefit` takes
+the same arguments.
 
 ## Tests
 
