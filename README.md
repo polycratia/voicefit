@@ -213,6 +213,10 @@ the same arguments.
 python -m pytest
 ```
 
+The suite runs on fixed texts and a fake model whose outputs are written down
+in the test itself, so every check, the retry and the fallback to the original
+are deterministic and no provider is called.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
