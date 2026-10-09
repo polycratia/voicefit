@@ -9,6 +9,79 @@ from repeating itself.
 
 It is a tool for a team's own voice. It is not a tool for evading detectors.
 
+## What it is for
+
+Teams that write together drift apart. A handbook written over two years has
+three voices in it, a changelog reads like whoever was on duty, and the only
+advice a reviewer can give is "make it sound more like us", which is not
+something a writer can act on. voicefit turns that sentence into numbers taken
+from the corpus the team already has:
+
+- bring a draft into the voice of a docs set, a handbook or a changelog that
+  already exists;
+- hand a new writer a measurement instead of an impression;
+- rewrite through a model without losing the versions, numbers, links and
+  ticket keys that make the text true;
+- keep a run of rewrites from settling into one opening and one closing phrase.
+
+The profile is built from texts you pass in, so the target is a voice the team
+already owns and can point at.
+
+## What it is not for
+
+voicefit is not a tool for evading detectors, and it is not built to help text
+pass as something it is not. That is a non-goal rather than a missing feature:
+the design works against it.
+
+- The target is always a corpus you supply. There is no "sound human" mode, no
+  classifier in the loop, and nothing that scores how machine-like a text
+  reads.
+- The axes are plain style measurements: sentence length and its spread,
+  hedging, questions, punctuation habits, paragraph shape. They are chosen to
+  describe how a team writes, and tuning them against a detector would mean
+  chasing a target that changes without notice and says nothing about a voice.
+- Every judgement is reported axis by axis, in that axis's own units, with the
+  scale it was standardised by. A tool for evasion wants one opaque number and
+  an output nobody re-reads; voicefit wants the opposite.
+- A rewrite that drops a number or a link is refused even when it sits
+  perfectly on profile. Evasion tolerates drift in meaning as long as the
+  output passes. Here meaning comes first and the voice second.
+- Nothing is hidden from the author: the instruction sent to the model, the
+  answer that came back and every check are kept in the result and serialise to
+  JSON.
+
+Imitating a writer who did not hand over their corpus is outside this as well.
+Build the profile from texts the team wrote, and store it next to them.
+
+## The checks and why they are there
+
+A rewrite is only useful if you can say what it kept. Three checks run on every
+attempt, and an attempt passes only when all three do.
+
+| Check | What it catches | On failure |
+| --- | --- | --- |
+| Protected spans | a lost or altered number, link, code span or identifier | the attempt fails and the missing spans are quoted back to the model |
+| Profile distance | prose that drifted off the measured voice | the attempt fails and the off-profile axes are quoted with their numbers |
+| Output memory | a run of texts that all open and close the same way | the attempt fails and the overused shapes are named as shapes to avoid |
+
+Spans are checked because a style rewrite has no business touching facts. A
+model asked to shorten sentences will cheerfully turn `v2.1.0` into "the latest
+version" and 3 replicas into "a few". The check is literal and counted, so the
+author does not have to proofread for it.
+
+Distance is checked per axis because "close enough" is not a number. One axis
+sitting far off is a different problem from every axis sitting slightly off,
+and a single score cannot tell you which of the two happened.
+
+Memory is checked because a text can be on target on every axis and still read
+as a template. The averages say nothing about the fact that the last six
+outputs all began with the same four words.
+
+A failing attempt is retried once with its failures spelled out. If the retry
+fails too, the original text is returned and `accepted` is `False`: the loop
+never hands back a rewrite that did not pass, so a silent regression is not one
+of the outcomes.
+
 ## Status
 
 Pre-alpha: profiling, distance reporting, protected spans, the rewrite loop,
