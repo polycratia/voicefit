@@ -33,6 +33,13 @@ SHUFFLED = (
     "We bumped the client to v2.1.0. "
     "The migration ran clean and needed no rollback."
 )
+# Every span of the source survives, and a figure the source never stated is
+# added to them.
+INVENTED = (
+    "The migration ran clean and needed no rollback. "
+    "We bumped the client to v2.1.0 after 4 retries.\n\n"
+    "Notes live at https://example.com/runbook."
+)
 DRIFTED = (
     "The migration ran clean and needed no rollback at all, and we then bumped "
     "the client to v2.1.0 while the notes live at https://example.com/runbook."
@@ -52,6 +59,7 @@ LOST_URL = (
     'protected url "https://example.com/runbook" appears 0 times in the rewrite,'
     " expected 1"
 )
+ADDED_NUMBER = 'added number "4" appears 1 times in the rewrite, expected 0'
 
 
 class FakeModel:
@@ -105,9 +113,33 @@ def test_the_reordered_rewrite_measures_exactly_like_its_source(profile):
     result = rewrite(SOURCE, profile, FakeModel(SHUFFLED))
     assert result.accepted
     assert result.text == SHUFFLED
+    spans = result.attempts[0].spans
+    assert spans.intact
+    assert spans.lost == ()
+    assert spans.added == ()
     distance = result.attempts[0].distance
     assert distance is not None
     assert distance.max_deviation == pytest.approx(0.0)
+
+
+def test_an_invented_number_is_refused_though_every_span_survived(profile):
+    model = FakeModel(INVENTED)
+    result = rewrite(SOURCE, profile, model, constraints=LOOSE)
+    assert not result.accepted
+    assert result.text == SOURCE
+    assert model.calls == 2
+    spans = result.attempts[0].spans
+    assert spans.lost == ()
+    assert [check.text for check in spans.added] == ["4"]
+    assert result.failures == (ADDED_NUMBER,)
+
+
+def test_the_invented_number_is_quoted_on_the_retry(profile):
+    model = FakeModel(INVENTED, SHUFFLED)
+    result = rewrite(SOURCE, profile, model, constraints=LOOSE)
+    assert result.accepted
+    assert result.text == SHUFFLED
+    assert ADDED_NUMBER in model.instructions[1]
 
 
 def test_a_lost_span_is_named_with_the_counts_that_were_wanted(profile):

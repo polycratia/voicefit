@@ -1,11 +1,13 @@
 """Protected spans: the parts of a text a rewrite has to carry over unchanged.
 
 A rewrite may move words around. It may not drop a URL, a code span, a number
-or an identifier. Those spans are extracted from the source and then looked for
-in the rewrite byte for byte: a span survives only when the exact characters
-are present and are not glued into a longer word, number or URL, so ``42`` in
-the rewrite never passes for a ``4`` in the source. Repeated spans are counted,
-not merged.
+or an identifier, and it may not invent one. The spans of the source are looked
+for in the rewrite byte for byte: a span survives only when the exact
+characters are present and are not glued into a longer word, number or URL, so
+``42`` in the rewrite never passes for a ``4`` in the source. Repeated spans
+are counted, not merged. The spans of the rewrite are read in the same way, and
+one whose text is nowhere in the source is reported as added, so a figure the
+author never wrote fails like one the rewrite lost.
 
 Extraction reads identifiers widely -- file names, dotted paths, versions,
 ticket keys, hashes and digit-letter mixes such as ``200ms`` stay whole -- and
@@ -170,8 +172,12 @@ class SpanCheck:
     found: int
 
     @property
+    def added(self) -> bool:
+        return self.expected == 0 and self.found > 0
+
+    @property
     def survived(self) -> bool:
-        return self.found >= self.expected
+        return not self.added and self.found >= self.expected
 
     @property
     def missing(self) -> int:
@@ -184,19 +190,36 @@ class SpanCheck:
             "expected": self.expected,
             "found": self.found,
             "missing": self.missing,
+            "added": self.added,
             "survived": self.survived,
         }
 
 
+def _grouped(
+    spans: tuple[ProtectedSpan, ...],
+) -> tuple[list[str], dict[str, str], dict[str, int]]:
+    order: list[str] = []
+    kind_of: dict[str, str] = {}
+    counts: dict[str, int] = {}
+    for span in spans:
+        if span.text not in counts:
+            order.append(span.text)
+            kind_of[span.text] = span.kind
+            counts[span.text] = 0
+        counts[span.text] += 1
+    return order, kind_of, counts
+
+
 @dataclass(frozen=True, kw_only=True)
 class SpanReport:
-    """What a rewrite kept of the protected spans of its source."""
+    """What a rewrite kept of the protected spans of its source, and what it added."""
 
     spans: tuple[ProtectedSpan, ...]
     checks: tuple[SpanCheck, ...]
+    added: tuple[SpanCheck, ...] = ()
 
     def check(self, text: str) -> SpanCheck:
-        for check in self.checks:
+        for check in self.checks + self.added:
             if check.text == text:
                 return check
         raise KeyError(text)
@@ -207,7 +230,7 @@ class SpanReport:
 
     @property
     def intact(self) -> bool:
-        return not self.lost
+        return not self.lost and not self.added
 
     def report(self) -> str:
         """Render one line per protected text, in order of first appearance."""
@@ -218,6 +241,11 @@ class SpanReport:
                 f"{check.kind:<12}{check.expected:>6}{check.found:>7}  "
                 f"{flag:<6}{_preview(check.text)}"
             )
+        for check in self.added:
+            lines.append(
+                f"{check.kind:<12}{check.expected:>6}{check.found:>7}  "
+                f"{'added':<6}{_preview(check.text)}"
+            )
         return "\n".join(lines)
 
     def to_dict(self) -> dict[str, Any]:
@@ -226,6 +254,7 @@ class SpanReport:
             "intact": self.intact,
             "span_count": len(self.spans),
             "lost": [check.text for check in self.lost],
+            "added": [check.to_dict() for check in self.added],
             "checks": [check.to_dict() for check in self.checks],
             "spans": [span.to_dict() for span in self.spans],
         }
@@ -264,25 +293,19 @@ def extract_spans(
 def verify_spans(
     source: str, rewrite: str, *, kinds: Iterable[str] | None = None
 ) -> SpanReport:
-    """Check that every protected span of ``source`` is still in ``rewrite``.
+    """Check the protected spans of ``source`` against those of ``rewrite``.
 
     Identical spans are grouped by their text and counted, so a number used
-    twice in the source has to appear twice in the rewrite.
+    twice in the source has to appear twice in the rewrite. The spans of the
+    rewrite are read as well: one whose text is nowhere in the source is
+    reported in :attr:`SpanReport.added` with an expected count of zero, so an
+    invented figure fails the report the way a dropped one does.
     """
     if not isinstance(rewrite, str):
         raise TypeError("verify_spans expects one rewritten string")
 
     spans = extract_spans(source, kinds=kinds)
-    order: list[str] = []
-    kind_of: dict[str, str] = {}
-    expected: dict[str, int] = {}
-    for span in spans:
-        if span.text not in expected:
-            order.append(span.text)
-            kind_of[span.text] = span.kind
-            expected[span.text] = 0
-        expected[span.text] += 1
-
+    order, kind_of, expected = _grouped(spans)
     checks = tuple(
         SpanCheck(
             kind=kind_of[text],
@@ -292,4 +315,11 @@ def verify_spans(
         )
         for text in order
     )
-    return SpanReport(spans=spans, checks=checks)
+
+    new_order, new_kind_of, counts = _grouped(extract_spans(rewrite, kinds=kinds))
+    added = tuple(
+        SpanCheck(kind=new_kind_of[text], text=text, expected=0, found=counts[text])
+        for text in new_order
+        if _occurrences(source, text, new_kind_of[text]) == 0
+    )
+    return SpanReport(spans=spans, checks=checks, added=added)

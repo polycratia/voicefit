@@ -5,7 +5,7 @@ the constraints, hand it to the callable, measure what comes back against the
 protected spans of the source and against the profile itself, and on failure
 ask once more with the failures spelled out. When the retry fails as well, the
 original text is returned, so a caller never silently ships a rewrite that lost
-a number or drifted off the profile.
+a number, invented one, or drifted off the profile.
 
 An :class:`~voicefit.memory.OutputMemory` can be handed in too. The shapes it
 already holds are named in the instruction, a rewrite that repeats one of them
@@ -114,6 +114,7 @@ def _rule_lines(
     lines = [
         "- Keep every fact, number, link and identifier the text states.",
         "- Add nothing the text does not say, and drop nothing it does.",
+        "- State no number, link or identifier that is not already in the text.",
     ]
     protected = _protected_texts(spans)
     if protected:
@@ -177,6 +178,11 @@ def _failures(spans: SpanReport, distance: ProfileDistance | None) -> list[str]:
         f" rewrite, expected {check.expected}"
         for check in spans.lost
     ]
+    failures.extend(
+        f'added {check.kind} "{check.text}" appears {check.found} times in the'
+        " rewrite, expected 0"
+        for check in spans.added
+    )
     if distance is None:
         return failures
     failures.extend(

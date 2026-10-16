@@ -62,6 +62,7 @@ def test_a_rewrite_that_keeps_everything_is_intact():
     )
     assert result.intact
     assert result.lost == ()
+    assert result.added == ()
     assert all(check.survived for check in result.checks)
 
 
@@ -76,6 +77,24 @@ def test_a_dropped_number_and_url_are_reported():
         "https://api.example.com/v2",
     ]
     assert result.check("3").missing == 1
+
+
+def test_a_span_the_source_never_had_is_reported_as_added():
+    result = verify_spans("Deploy 3 replicas.", "Deploy 3 replicas across 2 regions.")
+    assert not result.intact
+    assert result.lost == ()
+    assert [(check.kind, check.text, check.found) for check in result.added] == [
+        ("number", "2", 1)
+    ]
+    invented = result.check("2")
+    assert invented.expected == 0
+    assert invented.added
+    assert not invented.survived
+
+
+def test_an_invented_span_is_counted_as_often_as_it_appears():
+    result = verify_spans("Retry twice.", "Retry 2 times, then 2 more.")
+    assert [(check.text, check.found) for check in result.added] == [("2", 2)]
 
 
 def test_a_number_glued_into_a_longer_number_does_not_count():
@@ -103,11 +122,31 @@ def test_kinds_narrow_what_is_protected():
     assert verify_spans(source, rewrite, kinds=["url"]).intact
 
 
+def test_kinds_narrow_what_counts_as_added():
+    source = "Send requests to https://example.com/api."
+    rewrite = "Send 5 requests to https://example.com/api."
+    assert not verify_spans(source, rewrite).intact
+    assert verify_spans(source, rewrite, kinds=["url"]).intact
+
+
 def test_report_lists_every_span_with_a_flag():
     report = verify_spans("Ship 2 fixes to `main`.", "Ship the fixes.").report()
     assert "lost" in report
     assert "main" in report
     assert "2" in report
+
+
+def test_report_and_json_carry_the_added_spans():
+    result = verify_spans("Ship the fix.", "Ship fix 7 to `main`.")
+    report = result.report()
+    assert "added" in report
+    assert "7" in report
+    payload = json.loads(result.to_json())
+    assert payload["intact"] is False
+    assert [check["text"] for check in payload["added"]] == [
+        check.text for check in result.added
+    ]
+    assert payload["added"][0]["expected"] == 0
 
 
 def test_report_serialises_to_json():
@@ -116,6 +155,7 @@ def test_report_serialises_to_json():
     assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["intact"] is False
     assert payload["lost"] == [check.text for check in result.lost]
+    assert payload["added"] == []
     assert [check["text"] for check in payload["checks"]] == [
         check.text for check in result.checks
     ]
