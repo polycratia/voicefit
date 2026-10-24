@@ -60,6 +60,7 @@ LOST_URL = (
     " expected 1"
 )
 ADDED_NUMBER = 'added number "4" appears 1 times in the rewrite, expected 0'
+EXTRA_NUMBER = 'protected number "3" appears 2 times in the rewrite, expected 1'
 
 
 class FakeModel:
@@ -161,6 +162,20 @@ def test_a_span_used_twice_in_the_source_must_survive_twice():
         'protected number "3" appears 1 times in the rewrite, expected 2',
     )
     assert result.attempts[0].spans.check("make audit").survived
+
+
+def test_a_span_stated_once_too_often_is_quoted_on_the_retry():
+    counted = build_profile([COUNTED_ONCE])
+    model = FakeModel(COUNTED)
+    result = rewrite(COUNTED_ONCE, counted, model, constraints=LOOSE)
+    assert not result.accepted
+    assert result.text == COUNTED_ONCE
+    assert model.calls == 2
+    spans = result.attempts[0].spans
+    assert spans.lost == ()
+    assert [check.text for check in spans.duplicated] == ["3"]
+    assert result.failures == (EXTRA_NUMBER,)
+    assert EXTRA_NUMBER in model.instructions[1]
 
 
 def test_an_empty_rewrite_fails_before_it_is_measured(profile):

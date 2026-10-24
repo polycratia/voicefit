@@ -60,7 +60,7 @@ attempt, and an attempt passes only when all three do.
 
 | Check | What it catches | On failure |
 | --- | --- | --- |
-| Protected spans | a lost or altered number, link, code span or identifier | the attempt fails and the missing spans are quoted back to the model |
+| Protected spans | a number, link, code span or identifier that was dropped, altered or stated once too often | the attempt fails and the spans that are off are quoted back to the model with their counts |
 | Profile distance | prose that drifted off the measured voice | the attempt fails and the off-profile axes are quoted with their numbers |
 | Output memory | a run of texts that all open and close the same way | the attempt fails and the overused shapes are named as shapes to avoid |
 
@@ -161,17 +161,19 @@ result = verify_spans(
 
 print(result.intact)
 print(result.report())
-for check in result.lost:
+for check in result.lost + result.duplicated:
     print(check.kind, check.text, check.expected, check.found)
 ```
 
 `extract_spans` pulls URLs, code spans (inline and fenced), numbers and
 identifiers out of a text, in order and without overlap: a URL inside a code
 span belongs to that code span. `verify_spans` takes those spans from the
-source and looks for each one in the rewrite byte for byte. A span counts as
-surviving only when the exact characters are there and are not glued into a
+source and looks for each one in the rewrite byte for byte. An occurrence
+counts only when the exact characters are there and are not glued into a
 longer word, number or URL, so a `42` in the rewrite never passes for a `4` in
-the source. Repeated spans are counted: two mentions of `3` must still be two.
+the source. Occurrences are counted on both sides by the same rule: two
+mentions of `3` must still be exactly two, so a surplus is refused like a
+drop, and an unchanged rewrite is intact by construction.
 
 Identifiers are read widely, so file names, dotted paths, versions such as
 `v1.2.3`, ticket keys such as `ENG-421`, hashes and digit-letter mixes such as

@@ -115,6 +115,46 @@ def test_repeated_spans_must_all_survive():
     assert check.missing == 1
 
 
+def test_a_span_stated_more_often_than_the_source_is_duplicated():
+    result = verify_spans("Retry 3 times.", "Retry 3 times, then 3 more.")
+    check = result.check("3")
+    assert check.expected == 1
+    assert check.found == 2
+    assert check.extra == 1
+    assert check.missing == 0
+    assert not check.survived
+    assert not result.intact
+    assert result.lost == ()
+    assert result.added == ()
+    assert [duplicate.text for duplicate in result.duplicated] == ["3"]
+    assert "extra" in result.report()
+    payload = json.loads(result.to_json())
+    assert payload["duplicated"] == ["3"]
+    assert payload["checks"][0]["extra"] == 1
+
+
+def test_a_number_inside_a_date_is_counted_on_both_sides():
+    result = verify_spans(
+        "Released 2026-10-19 with 10 fixes.",
+        "Released 2026-10-19.",
+    )
+    check = result.check("10")
+    assert check.expected == 2
+    assert check.found == 1
+    assert check.missing == 1
+    assert not result.intact
+    assert [lost.text for lost in result.lost] == ["10"]
+
+
+def test_an_unchanged_rewrite_is_intact_where_spans_overlap():
+    text = "Set `retries = 3` and wait 3 seconds."
+    result = verify_spans(text, text)
+    assert result.intact
+    assert result.duplicated == ()
+    assert result.check("3").expected == 2
+    assert all(check.found == check.expected for check in result.checks)
+
+
 def test_kinds_narrow_what_is_protected():
     source = "Send 5 requests to https://example.com/api."
     rewrite = "Send a few requests to https://example.com/api."
@@ -155,6 +195,7 @@ def test_report_serialises_to_json():
     assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["intact"] is False
     assert payload["lost"] == [check.text for check in result.lost]
+    assert payload["duplicated"] == []
     assert payload["added"] == []
     assert [check["text"] for check in payload["checks"]] == [
         check.text for check in result.checks
