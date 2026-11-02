@@ -4,8 +4,8 @@ Fit text to a measured style profile.
 
 voicefit builds a style profile from an author's own corpus, rewrites text
 through a caller-supplied model under measurable constraints, verifies that
-facts, numbers, links and identifiers survive the rewrite, and keeps output
-from repeating itself.
+facts, numbers, links and identifiers survive the rewrite and that none were
+invented, and keeps output from repeating itself.
 
 It is a tool for a team's own voice. It is not a tool for evading detectors.
 
@@ -21,7 +21,8 @@ from the corpus the team already has:
   already exists;
 - hand a new writer a measurement instead of an impression;
 - rewrite through a model without losing the versions, numbers, links and
-  ticket keys that make the text true;
+  ticket keys that make the text true, and without gaining ones the author
+  never wrote;
 - keep a run of rewrites from settling into one opening and one closing phrase.
 
 The profile is built from texts you pass in, so the target is a voice the team
@@ -43,9 +44,9 @@ the design works against it.
 - Every judgement is reported axis by axis, in that axis's own units, with the
   scale it was standardised by. A tool for evasion wants one opaque number and
   an output nobody re-reads; voicefit wants the opposite.
-- A rewrite that drops a number or a link is refused even when it sits
-  perfectly on profile. Evasion tolerates drift in meaning as long as the
-  output passes. Here meaning comes first and the voice second.
+- A rewrite that drops a number or a link, or invents one, is refused even when
+  it sits perfectly on profile. Evasion tolerates drift in meaning as long as
+  the output passes. Here meaning comes first and the voice second.
 - Nothing is hidden from the author: the instruction sent to the model, the
   answer that came back and every check are kept in the result and serialise to
   JSON.
@@ -60,14 +61,18 @@ attempt, and an attempt passes only when all three do.
 
 | Check | What it catches | On failure |
 | --- | --- | --- |
-| Protected spans | a number, link, code span or identifier that was dropped, altered or stated once too often | the attempt fails and the spans that are off are quoted back to the model with their counts |
+| Protected spans | a number, link, code span or identifier that was dropped, altered, stated once too often, or invented outright | the attempt fails and the spans that are off are quoted back to the model with their counts |
 | Profile distance | prose that drifted off the measured voice | the attempt fails and the off-profile axes are quoted with their numbers |
 | Output memory | a run of texts that all open and close the same way | the attempt fails and the overused shapes are named as shapes to avoid |
 
 Spans are checked because a style rewrite has no business touching facts. A
 model asked to shorten sentences will cheerfully turn `v2.1.0` into "the latest
-version" and 3 replicas into "a few". The check is literal and counted, so the
-author does not have to proofread for it.
+version" and 3 replicas into "a few". It will just as cheerfully state a figure
+the source never gave, which is the harder failure to spot: an invented number
+reads as confidently as a true one. So the spans of the rewrite are read too,
+and one whose text is nowhere in the source fails the attempt the way a dropped
+one does. The check is literal and counted, so the author does not have to
+proofread for it.
 
 Distance is checked per axis because "close enough" is not a number. One axis
 sitting far off is a different problem from every axis sitting slightly off,
@@ -163,6 +168,8 @@ print(result.intact)
 print(result.report())
 for check in result.lost + result.duplicated:
     print(check.kind, check.text, check.expected, check.found)
+for check in result.added:
+    print(check.kind, check.text, check.found)
 ```
 
 `extract_spans` pulls URLs, code spans (inline and fenced), numbers and
@@ -174,6 +181,12 @@ longer word, number or URL, so a `42` in the rewrite never passes for a `4` in
 the source. Occurrences are counted on both sides by the same rule: two
 mentions of `3` must still be exactly two, so a surplus is refused like a
 drop, and an unchanged rewrite is intact by construction.
+
+The spans of the rewrite are read in the same way. One whose text is nowhere
+in the source is reported in `SpanReport.added` with an expected count of zero,
+so `verify_spans("Deploy 3 replicas.", "Deploy 3 replicas across 2 regions.")`
+is not intact: the `2` was never written. A rewrite that moves the same spans
+around passes; one that adds a figure fails like one that lost it.
 
 Identifiers are read widely, so file names, dotted paths, versions such as
 `v1.2.3`, ticket keys such as `ENG-421`, hashes and digit-letter mixes such as
@@ -202,12 +215,13 @@ print(result.report())
 
 `rewrite` builds the instruction from the profile and the constraints, calls
 the model, then checks what came back: every protected span of the source has
-to survive, and every axis has to sit within `tolerance`. A failing attempt is
-retried once, with the measured failures quoted in the new instruction and the
-previous answer attached. If the retry fails too, `result.text` is the original
-text and `result.accepted` is `False`: the loop never hands back a rewrite that
-did not pass. Each attempt keeps its instruction, its output, its `SpanReport`
-and its `ProfileDistance`, and `RewriteResult.to_json()` stores the lot.
+to survive, no number, link or identifier the source never stated may appear,
+and every axis has to sit within `tolerance`. A failing attempt is retried
+once, with the measured failures quoted in the new instruction and the previous
+answer attached. If the retry fails too, `result.text` is the original text and
+`result.accepted` is `False`: the loop never hands back a rewrite that did not
+pass. Each attempt keeps its instruction, its output, its `SpanReport` and its
+`ProfileDistance`, and `RewriteResult.to_json()` stores the lot.
 
 `RewriteConstraints` carries the tolerance, the span `kinds` to protect, the
 `hedges` list the profile was built with, per-axis `scales`, and free-form

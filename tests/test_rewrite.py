@@ -23,6 +23,16 @@ DRIFTED = (
     "The migration ran clean and needed no rollback at all, and we then bumped "
     "the client to v2.1.0 while the notes live at https://example.com/runbook."
 )
+INVENTED = (
+    "The migration ran clean and needed no rollback. "
+    "We bumped the client to v2.1.0 after 3 attempts.\n\n"
+    "Notes live at https://example.com/runbook."
+)
+REORDERED = (
+    "We bumped the client to v2.1.0. "
+    "The migration ran clean and needed no rollback.\n\n"
+    "Notes live at https://example.com/runbook."
+)
 
 
 def test_the_instruction_carries_the_profile_the_spans_and_the_text():
@@ -107,6 +117,39 @@ def test_an_empty_rewrite_is_a_failure():
     assert result.attempts[0].distance is None
 
 
+def test_an_invented_number_is_refused_and_quoted_on_retry():
+    profile = build_profile([SOURCE])
+    seen: list[str] = []
+
+    def model(instruction: str) -> str:
+        seen.append(instruction)
+        return INVENTED
+
+    result = rewrite(
+        SOURCE, profile, model, constraints=RewriteConstraints(tolerance=100.0)
+    )
+    assert not result.accepted
+    assert result.text == SOURCE
+    spans = result.attempts[0].spans
+    assert spans.lost == ()
+    assert spans.duplicated == ()
+    assert not spans.intact
+    assert [(check.kind, check.text) for check in spans.added] == [("number", "3")]
+    assert any('added number "3"' in failure for failure in result.failures)
+    assert 'added number "3"' in seen[1]
+
+
+def test_a_reordered_rewrite_with_the_same_spans_passes():
+    profile = build_profile([SOURCE])
+    result = rewrite(SOURCE, profile, lambda instruction: REORDERED)
+    assert result.accepted
+    assert result.text == REORDERED
+    assert len(result.attempts) == 1
+    spans = result.attempts[0].spans
+    assert spans.intact
+    assert spans.added == ()
+
+
 def test_a_wider_tolerance_accepts_a_drifted_rewrite():
     profile = build_profile([SOURCE])
 
@@ -140,6 +183,25 @@ def test_constraints_can_narrow_what_is_protected():
     )
     assert loose.accepted
     assert loose.text == output
+
+
+def test_constraints_can_narrow_what_counts_as_invented():
+    profile = build_profile([SOURCE])
+
+    def model(instruction: str) -> str:
+        return INVENTED
+
+    assert not rewrite(
+        SOURCE, profile, model, constraints=RewriteConstraints(tolerance=100.0)
+    ).accepted
+    loose = rewrite(
+        SOURCE,
+        profile,
+        model,
+        constraints=RewriteConstraints(tolerance=100.0, kinds=["url"]),
+    )
+    assert loose.accepted
+    assert loose.text == INVENTED
 
 
 def test_a_custom_hedge_list_is_used_for_the_checks():
